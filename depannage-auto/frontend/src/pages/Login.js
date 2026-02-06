@@ -23,7 +23,8 @@ function Login() {
         navigate('/employe');
       }
     } catch (err) {
-      setError(err.response?.data?.error || 'Erreur de connexion');
+      console.error('Erreur:', err);
+      setError(err.message || 'Erreur de connexion');
     } finally {
       setLoading(false);
     }
@@ -51,7 +52,7 @@ function Login() {
               onChange={(e) => setLogin(e.target.value)}
               required
               autoFocus
-              placeholder="Entrez votre identifiant"
+              placeholder="admin ou employe1"
             />
           </div>
 
@@ -63,7 +64,7 @@ function Login() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              placeholder="Entrez votre mot de passe"
+              placeholder="Mot de passe"
             />
           </div>
 
@@ -79,10 +80,8 @@ function Login() {
         <div style={{ marginTop: '2rem', padding: '1rem', background: '#fef2f2', borderRadius: '0.5rem', fontSize: '0.875rem' }}>
           <strong style={{ color: '#dc2626' }}>Comptes de test :</strong>
           <div style={{ marginTop: '0.5rem', color: '#6b7280' }}>
-            <div>👤 <strong>Admin</strong> - Login: <strong>admin</strong>, Password: <strong>admin123</strong></div>
-            <div style={{ marginTop: '0.25rem' }}>👤 <strong>Employé 1</strong> - Login: <strong>employe1</strong>, Password: <strong>employe1</strong></div>
-            <div style={{ marginTop: '0.25rem' }}>👤 <strong>Employé 2</strong> - Login: <strong>employe2</strong>, Password: <strong>employe2</strong></div>
-            <div style={{ marginTop: '0.25rem' }}>👤 <strong>Employé 3</strong> - Login: <strong>employe3</strong>, Password: <strong>employe3</strong></div>
+            <div>👤 Admin - <strong>admin</strong> / <strong>admin123</strong></div>
+            <div>👤 Employé 1 - <strong>employe1</strong> / <strong>employe1</strong></div>
           </div>
         </div>
       </div>
