@@ -368,6 +368,10 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', message: 'Serveur opérationnel' });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Serveur démarré sur le port ${PORT}`);
+app.listen(PORT, () => {// DEBUG: voir les utilisateurs (temporaire)
+app.get('/api/debug-users', (req, res) => {
+  db.all("SELECT id, login, role FROM utilisateurs", [], (err, rows) => {
+    if (err) return res.json(err);
+    res.json(rows);
+  });
 });
