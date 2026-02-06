@@ -1,12 +1,17 @@
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_API_URL || 'https://tafilalet.onrender.com';
+// ✅ URL correcte de votre backend Render
+const API_URL = process.env.REACT_APP_API_URL || 'https://tafilalet.onrender.com/api';
 
 const api = axios.create({
   baseURL: API_URL,
+  timeout: 15000, // 15 secondes
+  headers: {
+    'Content-Type': 'application/json',
+  }
 });
 
-// Intercepteur pour ajouter le token à chaque requête
+// Intercepteur pour ajouter le token
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
@@ -20,7 +25,7 @@ api.interceptors.request.use(
   }
 );
 
-// Intercepteur pour gérer les erreurs d'authentification
+// Intercepteur pour gérer les erreurs
 api.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -35,12 +40,22 @@ api.interceptors.response.use(
 
 export const authService = {
   login: async (login, password) => {
-    const response = await api.post('/login', { login, password });
-    if (response.data.token) {
-      localStorage.setItem('token', response.data.token);
-      localStorage.setItem('user', JSON.stringify(response.data.user));
+    try {
+      const response = await api.post('/login', { login, password });
+      if (response.data.token) {
+        localStorage.setItem('token', response.data.token);
+        localStorage.setItem('user', JSON.stringify(response.data.user));
+      }
+      return response.data;
+    } catch (error) {
+      if (error.response) {
+        throw new Error(error.response.data.error || 'Identifiant ou mot de passe incorrect');
+      } else if (error.request) {
+        throw new Error('Impossible de contacter le serveur. Vérifiez votre connexion.');
+      } else {
+        throw new Error('Une erreur est survenue.');
+      }
     }
-    return response.data;
   },
 
   logout: () => {
@@ -57,7 +72,6 @@ export const authService = {
     return !!localStorage.getItem('token');
   },
 };
-
 export const missionService = {
   getAll: (filters = {}) => {
     const params = new URLSearchParams();
