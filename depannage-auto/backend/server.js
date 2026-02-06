@@ -4,17 +4,127 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sqlite3 = require('sqlite3').verbose();
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET || 'votre_secret_jwt_tres_securise_changez_moi_en_production';
 
-// Middleware
-app.use(cors());
+// ✅ CORRECTION 1: Configuration CORS améliorée pour Render
+app.use(cors({
+  origin: '*', // En production, remplacez par l'URL exacte de votre frontend
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
-// Database connection
-const db = new sqlite3.Database('./database.sqlite');
+// ✅ CORRECTION 2: Gestion de la base de données
+const dbPath = path.join(__dirname, 'database.sqlite');
+console.log('📁 Chemin de la base de données:', dbPath);
+
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('❌ Erreur de connexion à la base de données:', err);
+  } else {
+    console.log('✅ Connexion à la base de données réussie');
+  }
+});
+
+// ✅ CORRECTION 3: Initialiser la base de données si elle n'existe pas
+db.serialize(() => {
+  // Table utilisateurs
+  db.run(`
+    CREATE TABLE IF NOT EXISTS utilisateurs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      login TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      nom_complet TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('employe', 'admin')),
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Table chauffeurs
+  db.run(`
+    CREATE TABLE IF NOT EXISTS chauffeurs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nom TEXT NOT NULL,
+      telephone TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Table missions
+  db.run(`
+    CREATE TABLE IF NOT EXISTS missions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      matricule TEXT NOT NULL,
+      marque TEXT NOT NULL,
+      lieu_depart TEXT NOT NULL,
+      lieu_arrivee TEXT NOT NULL,
+      prix DECIMAL(10, 2) NOT NULL,
+      chauffeur_id INTEGER,
+      date_mission DATE DEFAULT (date('now')),
+      created_by INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (chauffeur_id) REFERENCES chauffeurs(id),
+      FOREIGN KEY (created_by) REFERENCES utilisateurs(id)
+    )
+  `);
+
+  // Créer l'admin par défaut
+  db.get('SELECT * FROM utilisateurs WHERE login = ?', ['admin'], async (err, user) => {
+    if (!user) {
+      const adminPassword = bcrypt.hashSync('admin123', 10);
+      db.run(`
+        INSERT INTO utilisateurs (login, password, nom_complet, role) 
+        VALUES ('admin', ?, 'Administrateur Principal', 'admin')
+      `, [adminPassword], () => {
+        console.log('✅ Compte admin créé: admin / admin123');
+      });
+    }
+  });
+
+  // Créer les employés par défaut
+  const employes = [
+    ['employe1', 'employe1', 'Hassan Bennani'],
+    ['employe2', 'employe2', 'Samira Alaoui'],
+    ['employe3', 'employe3', 'Omar Tazi']
+  ];
+
+  employes.forEach(([login, password, nom]) => {
+    db.get('SELECT * FROM utilisateurs WHERE login = ?', [login], (err, user) => {
+      if (!user) {
+        const hashedPassword = bcrypt.hashSync(password, 10);
+        db.run(`
+          INSERT INTO utilisateurs (login, password, nom_complet, role) 
+          VALUES (?, ?, ?, 'employe')
+        `, [login, hashedPassword, nom], () => {
+          console.log(`✅ Compte employé créé: ${login} / ${password}`);
+        });
+      }
+    });
+  });
+
+  // Créer quelques chauffeurs de test
+  db.get('SELECT COUNT(*) as count FROM chauffeurs', [], (err, result) => {
+    if (result && result.count === 0) {
+      const chauffeurs = [
+        ['Mohamed Alami', '0612345678'],
+        ['Fatima Bennani', '0623456789'],
+        ['Ahmed Tazi', '0634567890']
+      ];
+      
+      const stmt = db.prepare('INSERT INTO chauffeurs (nom, telephone) VALUES (?, ?)');
+      chauffeurs.forEach(chauffeur => stmt.run(chauffeur));
+      stmt.finalize(() => {
+        console.log('✅ Chauffeurs de test créés');
+      });
+    }
+  });
+});
 
 // Middleware d'authentification
 const authenticateToken = (req, res, next) => {
@@ -27,6 +137,7 @@ const authenticateToken = (req, res, next) => {
 
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) {
+      console.log('❌ Token invalide:', err.message);
       return res.status(403).json({ error: 'Token invalide' });
     }
     req.user = user;
@@ -42,21 +153,40 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-// Routes d'authentification
+// =====================================
+// ROUTES D'AUTHENTIFICATION
+// =====================================
+
+// ✅ CORRECTION 4: Route de login améliorée avec logs
 app.post('/api/login', (req, res) => {
   const { login, password } = req.body;
 
+  console.log('🔐 Tentative de connexion pour:', login);
+
+  if (!login || !password) {
+    console.log('❌ Login ou mot de passe manquant');
+    return res.status(400).json({ error: 'Identifiant et mot de passe requis' });
+  }
+
   db.get('SELECT * FROM utilisateurs WHERE login = ?', [login], (err, user) => {
     if (err) {
+      console.error('❌ Erreur DB:', err);
       return res.status(500).json({ error: 'Erreur serveur' });
     }
 
     if (!user) {
+      console.log('❌ Utilisateur non trouvé:', login);
       return res.status(401).json({ error: 'Identifiants invalides' });
     }
 
     bcrypt.compare(password, user.password, (err, isValid) => {
-      if (err || !isValid) {
+      if (err) {
+        console.error('❌ Erreur bcrypt:', err);
+        return res.status(500).json({ error: 'Erreur serveur' });
+      }
+
+      if (!isValid) {
+        console.log('❌ Mot de passe incorrect pour:', login);
         return res.status(401).json({ error: 'Identifiants invalides' });
       }
 
@@ -66,19 +196,35 @@ app.post('/api/login', (req, res) => {
         { expiresIn: '24h' }
       );
 
+      console.log('✅ Connexion réussie pour:', login, '- Role:', user.role);
+
       res.json({
         token,
         user: {
           id: user.id,
           login: user.login,
-          role: user.role
+          role: user.role,
+          nom_complet: user.nom_complet
         }
       });
     });
   });
 });
 
-// Routes pour les missions
+// ⚠️ ROUTE DEBUG - À SUPPRIMER EN PRODUCTION
+app.get('/api/debug-users', (req, res) => {
+  db.all('SELECT id, login, role, nom_complet FROM utilisateurs', [], (err, users) => {
+    if (err) {
+      return res.status(500).json({ error: 'Erreur serveur' });
+    }
+    res.json(users);
+  });
+});
+
+// =====================================
+// ROUTES MISSIONS
+// =====================================
+
 app.get('/api/missions', authenticateToken, (req, res) => {
   const { chauffeur, date_debut, date_fin, employe } = req.query;
   
@@ -92,13 +238,11 @@ app.get('/api/missions', authenticateToken, (req, res) => {
   
   const params = [];
   
-  // Filtre par chauffeur
   if (chauffeur && chauffeur !== '') {
     query += ` AND c.nom LIKE ?`;
     params.push(`%${chauffeur}%`);
   }
   
-  // Filtre par date
   if (date_debut && date_debut !== '') {
     query += ` AND m.date_mission >= ?`;
     params.push(date_debut);
@@ -109,7 +253,6 @@ app.get('/api/missions', authenticateToken, (req, res) => {
     params.push(date_fin);
   }
   
-  // Filtre par employé
   if (employe && employe !== '') {
     query += ` AND u.nom_complet LIKE ?`;
     params.push(`%${employe}%`);
@@ -119,6 +262,7 @@ app.get('/api/missions', authenticateToken, (req, res) => {
 
   db.all(query, params, (err, rows) => {
     if (err) {
+      console.error('❌ Erreur missions:', err);
       return res.status(500).json({ error: 'Erreur lors de la récupération des missions' });
     }
     res.json(rows);
@@ -138,6 +282,7 @@ app.post('/api/missions', authenticateToken, (req, res) => {
     [matricule, marque, lieu_depart, lieu_arrivee, prix, chauffeur_id || null, req.user.id],
     function(err) {
       if (err) {
+        console.error('❌ Erreur création mission:', err);
         return res.status(500).json({ error: 'Erreur lors de la création de la mission' });
       }
 
@@ -196,7 +341,10 @@ app.delete('/api/missions/:id', authenticateToken, requireAdmin, (req, res) => {
   });
 });
 
-// Routes pour les statistiques
+// =====================================
+// ROUTES STATISTIQUES
+// =====================================
+
 app.get('/api/stats/daily', authenticateToken, requireAdmin, (req, res) => {
   const query = `
     SELECT date_mission, SUM(prix) as total 
@@ -241,68 +389,16 @@ app.get('/api/stats/general', authenticateToken, requireAdmin, (req, res) => {
   });
 });
 
-// Routes pour les chauffeurs
+// =====================================
+// ROUTES CHAUFFEURS
+// =====================================
+
 app.get('/api/chauffeurs', authenticateToken, (req, res) => {
   db.all('SELECT * FROM chauffeurs ORDER BY nom', [], (err, rows) => {
     if (err) {
       return res.status(500).json({ error: 'Erreur lors de la récupération des chauffeurs' });
     }
     res.json(rows);
-  });
-});
-
-// Route pour récupérer tous les employés
-app.get('/api/employes', authenticateToken, requireAdmin, (req, res) => {
-  db.all('SELECT id, login, nom_complet, created_at FROM utilisateurs WHERE role = ? ORDER BY nom_complet', ['employe'], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: 'Erreur lors de la récupération des employés' });
-    }
-    res.json(rows);
-  });
-});
-
-// Route pour créer un employé (admin uniquement)
-app.post('/api/employes', authenticateToken, requireAdmin, async (req, res) => {
-  const { login, password, nom_complet } = req.body;
-
-  try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-    
-    db.run(
-      'INSERT INTO utilisateurs (login, password, nom_complet, role) VALUES (?, ?, ?, ?)',
-      [login, hashedPassword, nom_complet, 'employe'],
-      function(err) {
-        if (err) {
-          if (err.message.includes('UNIQUE')) {
-            return res.status(400).json({ error: 'Ce login existe déjà' });
-          }
-          return res.status(500).json({ error: 'Erreur lors de la création de l\'employé' });
-        }
-
-        db.get('SELECT id, login, nom_complet, created_at FROM utilisateurs WHERE id = ?', [this.lastID], (err, employe) => {
-          res.status(201).json(employe);
-        });
-      }
-    );
-  } catch (err) {
-    res.status(500).json({ error: 'Erreur lors du cryptage du mot de passe' });
-  }
-});
-
-// Route pour supprimer un employé
-app.delete('/api/employes/:id', authenticateToken, requireAdmin, (req, res) => {
-  const { id } = req.params;
-
-  db.run('DELETE FROM utilisateurs WHERE id = ? AND role = ?', [id, 'employe'], function(err) {
-    if (err) {
-      return res.status(500).json({ error: 'Erreur lors de la suppression de l\'employé' });
-    }
-
-    if (this.changes === 0) {
-      return res.status(404).json({ error: 'Employé non trouvé' });
-    }
-
-    res.json({ message: 'Employé supprimé avec succès' });
   });
 });
 
@@ -363,19 +459,121 @@ app.delete('/api/chauffeurs/:id', authenticateToken, requireAdmin, (req, res) =>
   });
 });
 
-// Route de test
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'Serveur opérationnel' });
-});
+// =====================================
+// ROUTES EMPLOYÉS
+// =====================================
 
-// DEBUG: voir les utilisateurs (temporaire)
-app.get('/api/debug-users', (req, res) => {
-  db.all("SELECT id, login, role FROM utilisateurs", [], (err, rows) => {
-    if (err) return res.json(err);
+app.get('/api/employes', authenticateToken, requireAdmin, (req, res) => {
+  db.all('SELECT id, login, nom_complet, created_at FROM utilisateurs WHERE role = ? ORDER BY nom_complet', ['employe'], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ error: 'Erreur lors de la récupération des employés' });
+    }
     res.json(rows);
   });
 });
 
+app.post('/api/employes', authenticateToken, requireAdmin, async (req, res) => {
+  const { login, password, nom_complet } = req.body;
+
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    db.run(
+      'INSERT INTO utilisateurs (login, password, nom_complet, role) VALUES (?, ?, ?, ?)',
+      [login, hashedPassword, nom_complet, 'employe'],
+      function(err) {
+        if (err) {
+          if (err.message.includes('UNIQUE')) {
+            return res.status(400).json({ error: 'Ce login existe déjà' });
+          }
+          return res.status(500).json({ error: 'Erreur lors de la création de l\'employé' });
+        }
+
+        db.get('SELECT id, login, nom_complet, created_at FROM utilisateurs WHERE id = ?', [this.lastID], (err, employe) => {
+          res.status(201).json(employe);
+        });
+      }
+    );
+  } catch (err) {
+    res.status(500).json({ error: 'Erreur lors du cryptage du mot de passe' });
+  }
+});
+
+app.delete('/api/employes/:id', authenticateToken, requireAdmin, (req, res) => {
+  const { id } = req.params;
+
+  db.run('DELETE FROM utilisateurs WHERE id = ? AND role = ?', [id, 'employe'], function(err) {
+    if (err) {
+      return res.status(500).json({ error: 'Erreur lors de la suppression de l\'employé' });
+    }
+
+    if (this.changes === 0) {
+      return res.status(404).json({ error: 'Employé non trouvé' });
+    }
+
+    res.json({ message: 'Employé supprimé avec succès' });
+  });
+});
+
+// =====================================
+// ROUTES DE TEST ET SANTÉ
+// =====================================
+
+app.get('/', (req, res) => {
+  res.json({ 
+    message: '✅ API Assistance Tafilalet - Backend opérationnel',
+    version: '2.0',
+    endpoints: {
+      login: 'POST /api/login',
+      missions: 'GET /api/missions',
+      chauffeurs: 'GET /api/chauffeurs',
+      employes: 'GET /api/employes',
+      health: 'GET /api/health'
+    }
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    timestamp: new Date(),
+    database: 'SQLite connecté',
+    jwt: JWT_SECRET ? 'Configuré' : 'Non configuré'
+  });
+});
+
+// =====================================
+// DÉMARRAGE DU SERVEUR
+// =====================================
+
 app.listen(PORT, () => {
-  console.log(`🚀 Serveur démarré sur le port ${PORT}`);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('🚀 Serveur Assistance Tafilalet démarré');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log(`📡 Port: ${PORT}`);
+  console.log(`🔐 JWT Secret: ${JWT_SECRET ? 'Configuré ✅' : 'Non configuré ❌'}`);
+  console.log(`🗄️  Base de données: SQLite`);
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+  console.log('📋 Comptes disponibles:');
+  console.log('   👤 Admin - login: admin, password: admin123');
+  console.log('   👤 Employé 1 - login: employe1, password: employe1');
+  console.log('   👤 Employé 2 - login: employe2, password: employe2');
+  console.log('   👤 Employé 3 - login: employe3, password: employe3');
+  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+});
+
+// Gestion des erreurs non capturées
+process.on('unhandledRejection', (err) => {
+  console.error('❌ Erreur non gérée:', err);
+});
+
+process.on('SIGINT', () => {
+  db.close((err) => {
+    if (err) {
+      console.error('❌ Erreur fermeture DB:', err);
+    } else {
+      console.log('\n✅ Base de données fermée proprement');
+    }
+    process.exit(0);
+  });
 });
