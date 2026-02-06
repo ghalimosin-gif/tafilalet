@@ -77,7 +77,7 @@ db.serialize(() => {
   // Créer l'admin par défaut
   db.get('SELECT * FROM utilisateurs WHERE login = ?', ['admin'], async (err, user) => {
     if (!user) {
-      const adminPassword = bcrypt.hashSync('admin123', 10);
+      const adminPassword = bcrypt.hashSync('admin1980', 10);
       db.run(`
         INSERT INTO utilisateurs (login, password, nom_complet, role) 
         VALUES ('admin', ?, 'Administrateur Principal', 'admin')
