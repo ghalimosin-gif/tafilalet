@@ -5,14 +5,15 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'votre_secret_jwt_tres_securise_changez_moi_en_production';
 
-// ✅ CORRECTION 1: Configuration CORS améliorée pour Render
+// ✅ Configuration CORS
 app.use(cors({
-  origin: '*', // En production, remplacez par l'URL exacte de votre frontend
+  origin: '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
@@ -20,9 +21,13 @@ app.use(cors({
 
 app.use(express.json());
 
-// ✅ CORRECTION 2: Gestion de la base de données
-const dbPath = path.join(__dirname, 'database.sqlite');
+// ✅ Connexion à la base de données
+const dbPath = process.env.DB_PATH || './database.sqlite';
 console.log('📁 Chemin de la base de données:', dbPath);
+
+// Vérifier si la base de données existe déjà
+const dbExists = fs.existsSync(dbPath);
+console.log(dbExists ? '✅ Base de données existante trouvée' : '🆕 Création d\'une nouvelle base de données');
 
 const db = new sqlite3.Database(dbPath, (err) => {
   if (err) {
@@ -32,99 +37,93 @@ const db = new sqlite3.Database(dbPath, (err) => {
   }
 });
 
-// ✅ CORRECTION 3: Initialiser la base de données si elle n'existe pas
-db.serialize(() => {
-  // Table utilisateurs
-  db.run(`
-    CREATE TABLE IF NOT EXISTS utilisateurs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      login TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
-      nom_complet TEXT NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('employe', 'admin')),
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+// ✅ CORRECTION: Initialiser SEULEMENT si la DB est nouvelle
+if (!dbExists) {
+  console.log('🔧 Initialisation de la nouvelle base de données...');
+  
+  db.serialize(() => {
+    // Table utilisateurs
+    db.run(`
+      CREATE TABLE IF NOT EXISTS utilisateurs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        login TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        nom_complet TEXT NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('employe', 'admin')),
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-  // Table chauffeurs
-  db.run(`
-    CREATE TABLE IF NOT EXISTS chauffeurs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      nom TEXT NOT NULL,
-      telephone TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    // Table chauffeurs
+    db.run(`
+      CREATE TABLE IF NOT EXISTS chauffeurs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nom TEXT NOT NULL,
+        telephone TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-  // Table missions
-  db.run(`
-    CREATE TABLE IF NOT EXISTS missions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      matricule TEXT NOT NULL,
-      marque TEXT NOT NULL,
-      lieu_depart TEXT NOT NULL,
-      lieu_arrivee TEXT NOT NULL,
-      prix DECIMAL(10, 2) NOT NULL,
-      chauffeur_id INTEGER,
-      date_mission DATE DEFAULT (date('now')),
-      created_by INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (chauffeur_id) REFERENCES chauffeurs(id),
-      FOREIGN KEY (created_by) REFERENCES utilisateurs(id)
-    )
-  `);
+    // Table missions
+    db.run(`
+      CREATE TABLE IF NOT EXISTS missions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matricule TEXT NOT NULL,
+        marque TEXT NOT NULL,
+        lieu_depart TEXT NOT NULL,
+        lieu_arrivee TEXT NOT NULL,
+        prix DECIMAL(10, 2) NOT NULL,
+        chauffeur_id INTEGER,
+        date_mission DATE DEFAULT (date('now')),
+        created_by INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (chauffeur_id) REFERENCES chauffeurs(id),
+        FOREIGN KEY (created_by) REFERENCES utilisateurs(id)
+      )
+    `);
 
-  // Créer l'admin par défaut
-  db.get('SELECT * FROM utilisateurs WHERE login = ?', ['admin'], async (err, user) => {
-    if (!user) {
-      const adminPassword = bcrypt.hashSync('admin1980', 10);
+    // Créer l'admin par défaut
+    const adminPassword = bcrypt.hashSync('admin1980', 10);
+    db.run(`
+      INSERT INTO utilisateurs (login, password, nom_complet, role) 
+      VALUES ('admin', ?, 'Administrateur Principal', 'admin')
+    `, [adminPassword], () => {
+      console.log('✅ Compte admin créé: admin / admin123');
+    });
+
+    // Créer les employés par défaut
+    const employes = [
+      ['employe1', 'employe1', 'Hassan Bennani'],
+      ['employe2', 'employe2', 'Samira Alaoui'],
+      ['employe3', 'employe3', 'Omar Tazi']
+    ];
+
+    employes.forEach(([login, password, nom]) => {
+      const hashedPassword = bcrypt.hashSync(password, 10);
       db.run(`
         INSERT INTO utilisateurs (login, password, nom_complet, role) 
-        VALUES ('admin', ?, 'Administrateur Principal', 'admin')
-      `, [adminPassword], () => {
-        console.log('✅ Compte admin créé: admin / admin123');
+        VALUES (?, ?, ?, 'employe')
+      `, [login, hashedPassword, nom], () => {
+        console.log(`✅ Compte employé créé: ${login} / ${password}`);
       });
-    }
-  });
+    });
 
-  // Créer les employés par défaut
-  const employes = [
-    ['employe1', 'employe1', 'Hassan Bennani'],
-    ['employe2', 'employe2', 'Samira Alaoui'],
-    ['employe3', 'employe3', 'Omar Tazi']
-  ];
-
-  employes.forEach(([login, password, nom]) => {
-    db.get('SELECT * FROM utilisateurs WHERE login = ?', [login], (err, user) => {
-      if (!user) {
-        const hashedPassword = bcrypt.hashSync(password, 10);
-        db.run(`
-          INSERT INTO utilisateurs (login, password, nom_complet, role) 
-          VALUES (?, ?, ?, 'employe')
-        `, [login, hashedPassword, nom], () => {
-          console.log(`✅ Compte employé créé: ${login} / ${password}`);
-        });
-      }
+    // Créer quelques chauffeurs de test
+    const chauffeurs = [
+      ['Mohamed Alami', '0612345678'],
+      ['Fatima Bennani', '0623456789'],
+      ['Ahmed Tazi', '0634567890']
+    ];
+    
+    const stmt = db.prepare('INSERT INTO chauffeurs (nom, telephone) VALUES (?, ?)');
+    chauffeurs.forEach(chauffeur => stmt.run(chauffeur));
+    stmt.finalize(() => {
+      console.log('✅ Chauffeurs de test créés');
     });
   });
-
-  // Créer quelques chauffeurs de test
-  db.get('SELECT COUNT(*) as count FROM chauffeurs', [], (err, result) => {
-    if (result && result.count === 0) {
-      const chauffeurs = [
-        ['Mohamed Alami', '0612345678'],
-        ['Fatima Bennani', '0623456789'],
-        ['Ahmed Tazi', '0634567890']
-      ];
-      
-      const stmt = db.prepare('INSERT INTO chauffeurs (nom, telephone) VALUES (?, ?)');
-      chauffeurs.forEach(chauffeur => stmt.run(chauffeur));
-      stmt.finalize(() => {
-        console.log('✅ Chauffeurs de test créés');
-      });
-    }
-  });
-});
+} else {
+  console.log('ℹ️  Base de données existante - conservation des données');
+}
 
 // Middleware d'authentification
 const authenticateToken = (req, res, next) => {
@@ -157,7 +156,6 @@ const requireAdmin = (req, res, next) => {
 // ROUTES D'AUTHENTIFICATION
 // =====================================
 
-// ✅ CORRECTION 4: Route de login améliorée avec logs
 app.post('/api/login', (req, res) => {
   const { login, password } = req.body;
 
@@ -552,13 +550,7 @@ app.listen(PORT, () => {
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log(`📡 Port: ${PORT}`);
   console.log(`🔐 JWT Secret: ${JWT_SECRET ? 'Configuré ✅' : 'Non configuré ❌'}`);
-  console.log(`🗄️  Base de données: SQLite`);
-  console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-  console.log('📋 Comptes disponibles:');
-  console.log('   👤 Admin - login: admin, password: admin123');
-  console.log('   👤 Employé 1 - login: employe1, password: employe1');
-  console.log('   👤 Employé 2 - login: employe2, password: employe2');
-  console.log('   👤 Employé 3 - login: employe3, password: employe3');
+  console.log(`🗄️  Base de données: ${dbPath}`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 });
 
